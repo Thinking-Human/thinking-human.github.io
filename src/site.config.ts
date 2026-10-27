@@ -2,7 +2,7 @@
 export const SITE = {
   name: 'Thinking-Human',
   author: 'Thinking-Human',
-  description: 'Notes on research, engineering, and things we are learning.',
+  description: 'Simple, efficient notes on what we explore in AI.',
   // Header "Homepage" button; leave empty to hide it (this site is the homepage).
   homepage: '',
   sourceUrl: 'https://github.com/Thinking-Human/thinking-human.github.io',

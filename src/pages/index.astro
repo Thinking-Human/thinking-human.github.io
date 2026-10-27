@@ -8,28 +8,35 @@ import { SITE } from '../site.config';
 const [latest] = await getPosts();
 
 const intro = [
-  'Thinking-Human is a research group working on AI agents that perceive, decide, and act in the physical world.',
-  'Language models can now plan, write code, and use tools. Robots still mostly run policies trained for one embodiment and one set of tasks. We study what it takes to close that gap: how an agent should be told its task, what it should see and send to the world, how it remembers, how it keeps up with time, and how it improves across episodes.',
+  'Thinking-Human is a small group of researchers sharing what we explore in AI.',
+  'There is more writing about AI than ever, and less of it is worth reading: generated, padded, written to be shared rather than understood. We want the opposite. Say one thing clearly, show it with a figure, and stop.',
 ];
 
 const sections = [
   {
-    title: 'One loop, many builds',
+    title: 'Less, but better',
     points: [
-      ['Start from the loop.', 'Every robot policy, end-to-end or agentic, can be read as the same agent–environment loop. Comparing systems part by part is clearer than comparing them by architecture.'],
-      ['Combine, do not choose.', 'Vision-language-action models are good at moving; language-model agents are good at deciding what to do next. We are interested in systems that use each where it is strongest.'],
+      ['One question per post.', 'Each post starts from something we actually wanted to know, and ends when it is answered.'],
+      ['Figures before paragraphs.', 'If a table, a diagram, or an animation says it faster, we use that instead of prose.'],
     ],
   },
   {
-    title: 'Writing things down',
+    title: 'Made by people',
     points: [
-      ['Open notes.', 'We publish long-form technical posts with interactive figures, and the code behind them, so others can check, reuse, and build on the work.'],
+      ['Tools, not authors.', 'We use AI tools freely. The questions, the claims, and the mistakes are ours, and we stand behind every one.'],
+      ['Show the work.', 'Interactive figures, sources, and code, so readers can check instead of trust.'],
+    ],
+  },
+  {
+    title: 'Any topic',
+    points: [
+      ['Wherever the question leads.', 'Our first post is on agents for robots. The next may be on something else entirely.'],
     ],
   },
   {
     title: 'Get in touch',
     points: [
-      ['We like to talk.', 'If you work on robot learning, agents, or the space between them, we would be glad to hear from you.'],
+      ['Tell us.', 'If you want to write this way too, or think we got something wrong, we would like to hear it.'],
     ],
   },
 ];
