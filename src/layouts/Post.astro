@@ -1,0 +1,123 @@
+---
+import type { CollectionEntry } from 'astro:content';
+import type { MarkdownHeading } from 'astro';
+import Base from './Base.astro';
+import { formatDate } from '../lib/posts';
+
+interface Props {
+  post: CollectionEntry<'posts'>;
+  headings: MarkdownHeading[];
+}
+
+const { post, headings } = Astro.props;
+const { title, description, date, updated, authors, authorNote, draft, scene } = post.data;
+const people = authors.map((a) => (typeof a === 'string' ? { name: a, url: undefined, mark: undefined } : a));
+// Review mode is dev-only; the dynamic import keeps it out of production builds.
+const ReviewMode = import.meta.env.DEV ? (await import('../components/ReviewMode.astro')).default : null;
+const toc = headings.filter((h) => h.depth === 2 && !['footnote-label', 'references'].includes(h.slug));
+---
+
+<Base title={title} description={description} ogType="article" split scene={scene}>
+  <article class="post">
+    <header class="post-header">
+      {draft && <p class="draft-badge">Draft — not published</p>}
+      <p class="eyebrow">
+        Date: <time datetime={date.toISOString()}>{formatDate(date)}</time>
+        {updated && <span> · Updated <time datetime={updated.toISOString()}>{formatDate(updated)}</time></span>}
+      </p>
+      <h1>{title}</h1>
+      <p class="post-description">{description}</p>
+      {
+        people.length > 0 && (
+          <p class="post-meta">
+            {people.map((a, i) => (
+              <>
+                {i > 0 && ' · '}
+                {a.url ? <a href={a.url}>{a.name}</a> : a.name}
+                {a.mark && <sup class="author-mark">{a.mark}</sup>}
+              </>
+            ))}
+          </p>
+        )
+      }
+      {authorNote && <p class="author-note">{authorNote}</p>}
+    </header>
+
+    {
+      toc.length > 2 && (
+        <nav class="toc" aria-label="Contents">
+          <p class="toc-title">Contents</p>
+          <ol>
+            {toc.map((h) => (
+              <li>
+                <a href={`#${h.slug}`}>{h.text}</a>
+              </li>
+            ))}
+          </ol>
+        </nav>
+      )
+    }
+
+    <div class="prose">
+      <slot />
+    </div>
+  </article>
+  {ReviewMode && <ReviewMode post={post.id} />}
+</Base>
+
+<script>
+  // Cross-references: number figures, tables, and references in page order
+  // (matching the CSS counters), give them anchors, and turn "Figure N",
+  // "Table N", and "[n]" / "[n, m]" in the text into links.
+  const prose = document.querySelector<HTMLElement>('.prose');
+  if (prose) {
+    let fig = 0;
+    let tab = 0;
+    for (const f of prose.querySelectorAll<HTMLElement>('figure.figure.numbered')) {
+      f.id ||= f.classList.contains('is-table') ? `table-${++tab}` : `figure-${++fig}`;
+    }
+    const refs = prose.querySelectorAll<HTMLLIElement>('h2#references + ol > li');
+    refs.forEach((li, i) => (li.id = `ref-${i + 1}`));
+
+    const SKIP = 'a, code, pre, h1, h2, h3, h4, .figure-number, svg, script, style, h2#references + ol';
+    const pattern = /\b(Figure|Table) (\d+)\b|\[(\d+(?:,\s*\d+)*)\]/g;
+    const walker = document.createTreeWalker(prose, NodeFilter.SHOW_TEXT);
+    const nodes: Text[] = [];
+    while (walker.nextNode()) {
+      const n = walker.currentNode as Text;
+      if (!n.parentElement?.closest(SKIP) && (pattern.lastIndex = 0, pattern.test(n.data))) nodes.push(n);
+    }
+    const link = (href: string, text: string, cls: string) => {
+      const a = document.createElement('a');
+      a.href = href;
+      a.textContent = text;
+      a.className = cls;
+      return a;
+    };
+    for (const n of nodes) {
+      const frag = document.createDocumentFragment();
+      let last = 0;
+      for (const m of n.data.matchAll(pattern)) {
+        frag.append(n.data.slice(last, m.index));
+        if (m[1]) {
+          const id = `${m[1].toLowerCase()}-${m[2]}`;
+          frag.append(document.getElementById(id) ? link(`#${id}`, m[0], 'xref') : m[0]);
+        } else {
+          const nums = m[3].split(/,\s*/);
+          if (nums.every((k) => document.getElementById(`ref-${k}`))) {
+            frag.append('[');
+            nums.forEach((k, i) => {
+              if (i) frag.append(', ');
+              frag.append(link(`#ref-${k}`, k, 'cite'));
+            });
+            frag.append(']');
+          } else frag.append(m[0]);
+        }
+        last = m.index! + m[0].length;
+      }
+      frag.append(n.data.slice(last));
+      n.replaceWith(frag);
+    }
+  }
+</script>
+

@@ -1,0 +1,25 @@
+# build output
+dist/
+.astro/
+
+# review comments from `npm run dev` (local only)
+review/
+
+# social-media drafts and screenshots (local only)
+social/
+
+# dependencies
+node_modules/
+
+# logs
+npm-debug.log*
+
+# environment
+.env
+.env.*
+
+# editors / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store

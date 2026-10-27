@@ -1,0 +1,577 @@
+---
+title: 'LLM Agents for Robots: One Loop, Part by Part'
+description: 'One loop, many ways to build it: from end-to-end policies to agent systems for robots.'
+date: 2026-10-21
+authors:
+  - { name: 'Xirui Li', url: 'https://xirui-li.github.io/', mark: '*' }
+  - { name: 'Shaoxiong Yao', url: 'https://shaoxiongyao.github.io/', mark: '*' }
+authorNote: '*Co-writing'
+tags: ['robotics', 'agents']
+scene: robot_arm
+---
+
+import Figure from '../../../components/Figure.astro';
+import Diagram from '../../../components/Diagram.astro';
+import ActionForms from '../../../components/ActionForms.astro';
+import TimelineCompare from '../../../components/TimelineCompare.astro';
+
+{/* Opening: the one-paragraph thesis. The agent–environment loop fits every robot policy; what separates end-to-end models from agent systems is how each part of the loop is instantiated. */}
+
+Robot policies are usually discussed by architecture: an end-to-end model on one side, an agent built around a language model on the other. This post takes a different cut. It walks through one agent–environment loop part by part and asks, at each part, how end-to-end models and LLM-based agents differ, and where they can be combined.
+
+## The Agent–Environment Loop
+
+Every robot policy can be read as the same loop: an agent receives a [task](#task-instruction-and-prior-knowledge), [acts on its environment, and observes what happens](#interface-observation-and-action-spaces). An LLM-based agent, which here covers both VLM agents that act through tools and coding agents that write programs, makes this loop explicit, [reasoning about what it knows](#agent-policy-and-memory), acting, and reading the result before it reasons again, as in ReAct [1]. Figure 1 is the map for the rest of this post, from the loop's [timing](#time-steps-chunks-and-asynchrony) to [learning across episodes](#learning-meta-learning-continual-learning-and-rsi) and how [VLAs, WAMs, and LLM-based agents](#vla-vs-wam-vs-llm-based-agent) fill it in.
+
+{/* The map for the rest of the post. Introduce each part of Figure 1 and where it is discussed:
+    Task (g, K) → "Task" · the agent–environment boundary (o, r / a) → "Interface" · the agent box (M, π) → "Agent: Policy and Memory" · t = 0, 1, 2, … → "Time" · the Learning box and the stack of N episodes → "Learning".
+    Thesis: the loop fits every robot policy; what differs is how each part is instantiated. Each section contrasts end-to-end models with agent systems.
+    One paragraph to introduce what is being compared: one network can take over the whole agent box — Vision-Language-Action models (VLA, e.g. π0.5 [2], MolmoAct 2 [3]) map images + instruction to action chunks; World Action Models (WAM, e.g. DreamZero [4]) also predict the future observation. Or the agent box can be an agent system built around a VLM. The full comparison comes near the end. */}
+<Figure
+  width={925}
+  title="The agent–environment loop."
+  caption="The task is set once per episode; the agent and the environment then interact step by step, only through actions and observations. Learning sits outside this loop and updates π and M from the experience of many episodes."
+>
+  <Diagram
+    width={925}
+    height={460}
+    animate
+    repeat={{ from: 1, to: 4, times: 3 }}
+    label="Diagram: one task–agent–environment loop, drawn as a stack of N loops. The task gives the instruction to the agent's policy and prior knowledge to its memory; the agent sends action a_t to the environment, which returns observation o_t+1 and reward r_t+1. A separate learning box below collects experience from all N loops and updates the agent's policy and memory."
+    groups={[
+      { x: 5, y: 34, w: 890, h: 272, stack: 2 },
+      { x: 15, y: 44, w: 180, h: 250, label: 'Task', labelPos: 'bracket' },
+      { x: 255, y: 44, w: 250, h: 250, label: 'Agent', labelPos: 'bracket' },
+      { x: 640, y: 44, w: 245, h: 250, label: 'Environment', labelPos: 'bracket' },
+      { x: 255, y: 350, w: 630, h: 100, label: 'Learning', labelPos: 'bracket' },
+    ]}
+    nodes={[
+      { id: 'goal', x: 32, y: 66, w: 146, h: 58, label: 'Instruction g', kind: 'splat' },
+      { id: 'prior', x: 32, y: 196, w: 146, h: 60, label: 'Prior Knowledge K', kind: 'splat' },
+      { id: 'policy', x: 290, y: 66, w: 180, h: 58, label: 'Policy π', kind: 'engine' },
+      { id: 'memory', x: 290, y: 196, w: 180, h: 60, label: 'Memory M', kind: 'source' },
+      { id: 'state', x: 675, y: 66, w: 175, h: 58, label: 'Hidden State s\nTransition T', kind: 'decoder' },
+      { id: 'obs', x: 675, y: 196, w: 175, h: 60, label: 'Observation Z\nReward R', kind: 'model' },
+      { x: 572, y: 282, label: 't = 0, 1, 2, …', shape: 'text', align: 'middle', italic: true, size: 14, color: '#777' },
+      { id: 'learn', x: 360, y: 375, w: 440, h: 44, label: 'Meta-Learning / Continual Learning / RSI', kind: 'mesh' },
+    ]}
+    edges={[
+      { from: 'goal', to: 'policy', label: 'goal', step: 0 },
+      { from: 'prior', to: 'memory', label: 'prior', step: 0 },
+      { from: 'memory', to: 'policy', fromAt: 0.35, toAt: 0.35, label: 'mₜ / bₜ', labelAt: 0.4, step: 1 },
+      { from: 'policy', to: 'state', label: 'action aₜ', step: 2 },
+      { from: 'policy', to: 'memory', fromAt: 0.7, toAt: 0.7, label: 'executed aₜ', labelAt: 0.4, step: 2 },
+      { from: 'state', to: 'obs', label: 'sₜ₊₁', step: 3 },
+      { from: 'obs', to: 'memory', label: 'oₜ₊₁, rₜ₊₁', step: 4 },
+      { from: [760, 306], to: 'learn', toSide: 'top', toAt: 0.909, label: 'experience × N', dashed: true, step: 5 },
+      { from: 'learn', to: [400, 296], fromSide: 'top', fromAt: 0.091, label: 'update π, M', dashed: true, step: 6 },
+    ]}
+  />
+</Figure>
+
+## Task: Instruction and Prior Knowledge
+
+{/* Figure 1: the Task box (g, K) — set once per episode. Two subsections: what the robot is asked to do (g), and what it is given to know (K). */}
+
+### Instruction
+
+The most common instruction is a sentence of natural language. End-to-end policies such as RT-2 [5] take a short command like "put the cup in the basket", and an LLM-based agent receives it as a text prompt. Language is easy to give, but often ambiguous: which cup, and placed where?
+
+Other formats trade that ease for precision (Table 1). A goal image shows the finished scene [6], a sketched trajectory shows the motion [7], and a video shows a person doing the task once [8]. Multimodal prompts mix text with images [9], visual marks point at where to act [10], and formal specifications such as PDDL goals make the task checkable by a planner [11]. The more precise the format, the more effort it takes to provide, and the more irrelevant detail it fixes.
+
+<Figure
+  kind="table"
+  compact
+  title="Ways to give a robot its task."
+  caption="Formats range from abstract to specific: language is easy to give but ambiguous, while images and videos are precise but also fix details that do not matter."
+>
+
+| Format | Example | Specifies | Representative work |
+|---|---|---|---|
+| Language | "Put the cup in the basket" | Goal | RT-2 [5] |
+| Goal image | A photo of the finished scene | Goal | Play-LMP [6] |
+| Sketch or trajectory | A path drawn over the camera image | Goal or motion | RT-Trajectory [7] |
+| Video demonstration | A person doing the task once | Process | Vid2Robot [8] |
+| Multimodal prompt | "Put the [image] into the [image]" | Goal | VIMA [9] |
+| Visual marks | Points or arrows drawn on the image | Where to act | PIVOT [10] |
+| Formal specification | A PDDL goal or temporal-logic formula | Goal and constraints | LLM+P [11] |
+
+</Figure>
+
+The bigger difference is who reads the instruction. An end-to-end policy accepts only the formats it was trained on; adding sketches or videos means new data and retraining. An LLM-based agent can take anything it can read in context, such as text, images, rules, or a demonstration, and can ask a clarifying question when the instruction is ambiguous.
+
+{/* Writing outline (from the research notes):
+    - The default is natural language: short imperatives for VLAs (RT-1, RT-2, OpenVLA, π0/π0.5) and a text prompt for LLM-based agents.
+    - A spectrum of specificity: language is cheap but ambiguous and spatially vague; goal images and videos are precise but over-specified, and someone often has to do the task first; sketches, trajectories, and points sit in between — spatially grounded but sparse (RT-Sketch's argument).
+    - What an instruction specifies: the goal (what), the process (how), or constraints (what not to do).
+    - Formal specifications trade naturalness for verifiability: an LLM translates, a solver executes or checks (LLM+P; Lang2LTL; AutoTAMP). This is the main route for enforcing constraints (Safety Chip; RoboGuard; ASIMOV's natural-language "constitutions").
+    - Instructions can be compiled into something else before they reach a policy: reward code (Eureka, Text2Reward, Language to Rewards), policy code (Code as Policies, ProgPrompt), or intermediate language and visual traces (RT-H language motions, π0.5 subtasks, HAMSTER paths).
+    - VLA vs LLM-based agent: a VLA's instruction channel is fixed at training time — a new modality means new data and retraining (RT-Sketch, RT-Trajectory, GR-MG). An LLM-based agent accepts anything readable in context — rules, marked-up images, PDDL, dialogue — at the cost of weaker grounding to low-level control.
+    - Interaction: clarifying questions for ambiguous instructions (KnowNo), closed-loop feedback (Inner Monologue), corrections mid-execution (Interactive Language, RT-H, YAY Robot, OLAF). In Figure 1, g is set once per episode; corrections arrive as observations, since the person is part of the environment.
+    - Survey listing task-specification modalities: Hu et al. 2023, arXiv:2312.08782.
+
+    Other verified papers (arXiv IDs) if more citations are needed: CLIPort 2109.12098 · SayCan 2204.01691 · RT-1 2212.06817 · Interactive Language 2210.06407 · OpenVLA 2406.09246 · π0 2410.24164 · GCSL 1912.06088 · GR-MG 2408.14368 · GNM 2210.03370 · ViNT 2306.14846 · RT-Sketch 2403.02709 · HAMSTER 2502.05485 · Track2Act 2405.01527 · One-Shot Imitation 1703.07326 · BC-Z 2202.02005 · MUTEX 2309.14320 · Octo 2405.12213 · MOKA 2403.03174 · RoboPoint 2406.10721 · CrayonRobo 2505.02166 · Lang2LTL 2302.11649 · AutoTAMP 2306.06531 · Eureka 2310.12931 · Text2Reward 2309.11489 · Language to Rewards 2306.08647 · Code as Policies 2209.07753 · ProgPrompt 2209.11302 · KnowNo 2307.01928 · Inner Monologue 2207.05608 · RT-H 2403.01823 · YAY Robot 2403.12910 · OLAF 2310.17555 · Safety Chip 2309.09919 · RoboGuard 2503.07885 · ASIMOV 2503.08663 · Cui et al. 2204.11134. */}
+
+### Prior Knowledge
+
+Prior knowledge K, such as what skills do, how to call them, rules, and examples, lives in a VLA's weights but in an LLM-based agent's context. There, examples become a way to learn without changing any weights, which Table 2 groups into four families.
+
+<Figure
+  kind="table"
+  compact
+  title="Four families of in-context learning [12]."
+  caption="This post focuses on the last row, where the context steers what an agent decides to do."
+>
+
+| Family | What the context steers | Side | Example |
+|---|---|---|---|
+| Context-conditioned policies | The policy's input | End-to-end | VIMA [9] |
+| Geometric demonstration transfer | How a demo maps onto new objects | Geometric | Neural Descriptor Fields [13] |
+| World-model-based control | Predicted futures | End-to-end (WAM) | Zero-WAM [14] |
+| **Skill- and agent-based execution** | **Which skills the agent runs** | **LLM-based agent** | **GPT-Policy [15], RoboICL [16]** |
+
+</Figure>
+
+## Interface: Observation and Action Spaces
+
+{/* Figure 1: the two edges between agent and environment — the only way they interact. */}
+
+### Observation Space
+
+What the agent may see sets how hard the same task is (Table 3), and even a "success" from a tool can mean very different things (Table 4). Perception can also be an action: an agent can call a tool such as `get_position(cup)` and read the answer as its next observation.
+
+<Figure
+  kind="table"
+  compact
+  title="What the agent is allowed to see."
+  caption="Simulation can expose privileged state that a real robot never has; Embodied First Exam evaluates agents with and without it [17]."
+>
+
+| Level | Example | VLA | WAM | LLM-based agent |
+|---|---|---|---|---|
+| Images | RGB from one or more cameras | Yes | Yes | Yes |
+| Robot state | Joint angles, end-effector pose, depth | Usually | Usually | As text, through tools |
+| Geometry and calibration | Camera intrinsics, robot model, object meshes | Rarely | Rarely | Through tools |
+| Privileged state | Ground-truth object poses from the simulator | In simulation | In simulation | In simulation |
+| Feedback | Tool return values, success signals | No | Predicted, not observed | Yes |
+
+</Figure>
+
+<Figure
+  kind="table"
+  compact
+  title={'What a "success" can mean.'}
+  caption="A tool's return value is an observation, but it may report any of these events; Guava, for example, separates a closed gripper from a grasped object [18]."
+>
+
+| Event | Example |
+|---|---|
+| Request accepted | The tool call did not error |
+| Motion solved | Inverse kinematics found a joint solution |
+| Target reached | Position error within tolerance |
+| Grasp holds | The object is actually in the gripper |
+| Task done | An independent checker passes |
+
+</Figure>
+
+### Action Space
+
+The action space is what the VLM literally emits across the interface. It takes three common forms: numbers sent directly to the robot, a tool call with numeric arguments, or a program that sends many of them (Figure 2). Inside each form the numbers carry choices of their own (Table 5), and actions that look the same can still mean different things (Table 6).
+
+<Figure
+  width={1120}
+  title="Three ways a VLM emits actions."
+  caption="The same motion in each form. Schematic examples; argument names are simplified."
+>
+  <ActionForms examples={['Astranomy, direct [19]', 'Astranomy, agentic [19]; RobotWorld [20]; Guava [18]', 'Code as Policies [21]; CaP-X [22]']} />
+</Figure>
+
+<Figure
+  kind="table"
+  compact
+  title="What the numbers mean."
+  caption="In Astranomy, absolute end-effector targets worked better than joint angles or splines when the model emitted them directly; with a harness that sends one target at a time and returns feedback, the gap largely closed [19]."
+>
+
+| Choice | Options | Example |
+|---|---|---|
+| Space | Joint angles, end-effector pose, or spline coefficients | Astranomy compares all three [19] |
+| Reference | Absolute target, offset from the last target, or offset from the measured state | Astranomy's absolute, delta, and relative actions [19] |
+| Timing | One row per control tick, one target held for N steps, or a chunk | Direct vs. agentic in Astranomy [19]; `steps` in RobotWorld [20] |
+| Control point | Flange, fingertip, or gripper center | Same simulator, flange in Astranomy [19] and fingertip in Embodied First Exam [17] |
+
+</Figure>
+
+<Figure
+  kind="table"
+  compact
+  title="Same name, different action."
+  caption="An action space is defined only together with its contract: frame, control point, absolute or relative targets, and timing. The same simulator can expose different contracts in different frameworks [17, 19, 20]."
+>
+
+| Looks the same | Actually differs |
+|---|---|
+| A grasp action | `GRASP` closes the gripper [23]; `grasp(name)` also locates and approaches the object [18] |
+| `move_eef` | An absolute flange target, a repeated increment, or a planned move to the grasp point, by backend [20] |
+| An 8-D end-effector vector | Flange or fingertip; WXYZ or XYZW quaternion; gripper 0 means open or closed [19] |
+| "Discrete" actions | Semantic command words [23] or bins over each number [5] |
+
+</Figure>
+
+{/* Notes:
+    - Action chunking does not change the action space (still low-level commands, k at a time) — see "Time".
+    - A tool's return value is an observation (Table 4), which closes the loop between the two subsections.
+    - A VLA can itself be one tool (Harness VLA's vla_act) — the hybrid route in the comparison section.
+    - Programs can complete a task while violating a stated constraint (link to CaP-Safe Bench work, Open Question 3). */}
+
+## Agent: Policy and Memory
+
+{/* Figure 1: the agent box — Memory M and Policy π, joined by m_t / b_t and executed a_t.
+    Memory M (internal state, not an input; outline from the four questions):
+    - representation & capacity: raw history, summaries, world state, or a belief distribution?
+    - writing & forgetting: what gets written (observations, executed actions, g, K), when it is compressed or dropped;
+    - reading: what part of M reaches the policy each step (context construction — the m_t / b_t edge);
+    - persistence: within one episode, or across tasks?
+    - End-to-end: m_t ≈ the latest few frames. Agent: explicit execution record, world state, possibly long-term memory.
+    Policy π:
+    - end-to-end: one forward pass from observation to action; any reasoning stays inside the network;
+    - agent: ReAct-style — reason about m_t, choose an action, read its result, reason again. */}
+
+### Policy
+
+The same VLM can be wired into a policy in different ways. Astranomy compares three on the same robot tasks [19]: the model can act directly, emitting a stretch of actions and then looking again; act as an agent, sending one target at a time through a tool and reading the feedback; or supervise another policy, accepting or editing the actions it proposes (Figure 3). In that evaluation the agentic setup did best, and supervising another policy did not clearly beat acting directly. How the model is wired into the loop matters as much as the model itself.
+
+<Figure
+  width={860}
+  title="Three ways to wire a VLM into the loop."
+  caption="Direct: the model emits a chunk of actions, then looks again. Agentic: it sends one target at a time through a tool and reads the feedback. Orchestrated: another policy proposes actions and the model checks them. Modes from Astranomy [19]."
+>
+  <Diagram
+    width={860}
+    height={300}
+    animate
+    label="Three small loops. Direct: the VLM sends an action chunk to the robot and gets a new image back. Agentic: the VLM sends one target to a tool, the tool moves the robot, and feedback returns to the VLM. Orchestrated: another policy proposes an action, the VLM checks it and sends it to the robot, and the image returns to the other policy."
+    groups={[
+      { x: 10, y: 40, w: 270, h: 250, label: 'Direct: actor' },
+      { x: 295, y: 40, w: 270, h: 250, label: 'Agentic: agent in a loop' },
+      { x: 580, y: 40, w: 270, h: 250, label: 'Orchestrated: supervisor' },
+    ]}
+    nodes={[
+      { id: 'd_vlm', x: 50, y: 60, w: 110, h: 44, label: 'VLM', kind: 'engine' },
+      { id: 'd_robot', x: 50, y: 230, w: 110, h: 44, label: 'Robot', kind: 'neutral', shape: 'pill' },
+      { id: 'a_vlm', x: 335, y: 60, w: 110, h: 44, label: 'VLM', kind: 'engine' },
+      { id: 'a_tool', x: 335, y: 145, w: 110, h: 44, label: 'Tool', kind: 'model' },
+      { id: 'a_robot', x: 335, y: 230, w: 110, h: 44, label: 'Robot', kind: 'neutral', shape: 'pill' },
+      { id: 'o_pol', x: 665, y: 60, w: 130, h: 44, label: 'Other policy', kind: 'decoder' },
+      { id: 'o_vlm', x: 665, y: 145, w: 130, h: 44, label: 'VLM', kind: 'engine' },
+      { id: 'o_robot', x: 665, y: 230, w: 130, h: 44, label: 'Robot', kind: 'neutral', shape: 'pill' },
+    ]}
+    edges={[
+      { from: 'd_vlm', to: 'd_robot', label: 'action chunk', step: 0 },
+      { from: 'd_robot', to: 'd_vlm', fromSide: 'right', toSide: 'right', via: [[215, 252], [215, 82]], label: 'new image', step: 1 },
+      { from: 'a_vlm', to: 'a_tool', label: 'one target', step: 0 },
+      { from: 'a_tool', to: 'a_robot', step: 1 },
+      { from: 'a_robot', to: 'a_vlm', fromSide: 'right', toSide: 'right', via: [[505, 252], [505, 82]], label: 'feedback', step: 2 },
+      { from: 'o_pol', to: 'o_vlm', label: 'proposal', step: 0 },
+      { from: 'o_vlm', to: 'o_robot', label: 'checked action', step: 1 },
+      { from: 'o_robot', to: 'o_pol', fromSide: 'left', toSide: 'left', via: [[620, 252], [620, 82]], label: 'image', step: 2 },
+    ]}
+  />
+</Figure>
+
+Once the model is in the loop, how much each decision delegates also varies widely: the same task can be decided step by step or handed to a whole skill (Figure 4, Table 7).
+
+<Figure
+  width={900}
+  title="Who decides what."
+  caption="The same task, putting the cup in the basket, at four levels. Going down, the model's output gets more abstract and the executor fills in more; low-level control turns the result into motor commands in every case."
+>
+  <Diagram
+    width={900}
+    height={255}
+    label="Bar chart: for local motion the model decides most of the action; for spatial intent, geometric constraints, and tool choice it decides progressively less, and an executor fills in more. Low-level control is the same thin slice at the end of every bar."
+    nodes={[
+      { x: 195, y: 48, label: 'Local motion', shape: 'text', align: 'end', size: 15 },
+      { x: 210, y: 30, w: 390, h: 36, label: '"move left, down, close"', kind: 'engine', size: 13 },
+      { x: 604, y: 30, w: 222, h: 36, label: 'one small motion per word', kind: 'model', size: 13 },
+      { x: 830, y: 30, w: 60, h: 36, kind: 'decoder' },
+      { x: 195, y: 98, label: 'Spatial intent', shape: 'text', align: 'end', size: 15 },
+      { x: 210, y: 80, w: 300, h: 36, label: '"grasp here, drop there"', kind: 'engine', size: 13 },
+      { x: 514, y: 80, w: 312, h: 36, label: 'plans a collision-free path', kind: 'model', size: 13 },
+      { x: 830, y: 80, w: 60, h: 36, kind: 'decoder' },
+      { x: 195, y: 148, label: 'Geometric constraints', shape: 'text', align: 'end', size: 15 },
+      { x: 210, y: 130, w: 220, h: 36, label: '"cup above basket"', kind: 'engine', size: 13 },
+      { x: 434, y: 130, w: 392, h: 36, label: 'solves for poses that satisfy it', kind: 'model', size: 13 },
+      { x: 830, y: 130, w: 60, h: 36, kind: 'decoder' },
+      { x: 195, y: 198, label: 'Tool choice', shape: 'text', align: 'end', size: 15 },
+      { x: 210, y: 180, w: 120, h: 36, label: 'grasp(cup)', kind: 'engine', size: 13 },
+      { x: 334, y: 180, w: 492, h: 36, label: 'the skill runs the whole grasp', kind: 'model', size: 13 },
+      { x: 830, y: 180, w: 60, h: 36, kind: 'decoder' },
+    ]}
+    legend={{ x: 210, y: 232, direction: 'row', items: [
+      { kind: 'engine', label: 'Model decides' },
+      { kind: 'model', label: 'Executor fills in' },
+      { kind: 'decoder', label: 'Low-level control' },
+    ] }}
+  />
+</Figure>
+
+<Figure
+  kind="table"
+  compact
+  title="Four levels of what the model decides."
+  caption="Code, JSON, and action tokens are output forms that cut across these levels: a program can call a whole grasp skill or compute every end-effector pose [21, 22]."
+>
+
+| Level | The model decides | Example output | Filled in by | Example work |
+|---|---|---|---|---|
+| Local motion | How to move next | "move left", a pose change | Interpreter and controller | Show-Harness [23], RT-2 [5] |
+| Spatial intent | Where to touch, which way to go | Points, keyposes, 2D paths | Depth, planner, or a low-level policy | MOKA [24], HAMSTER [25] |
+| Geometric constraints | Which relations must hold | Keypoint constraints, 3D value maps | Optimizer or MPC | ReKep [26], VoxPoser [27] |
+| Tool choice | Which capability to call | `grasp(cup)`, `vla_act(...)` | Skill library or a frozen VLA | Guava [18], Harness VLA [28] |
+
+</Figure>
+
+### Memory
+
+In an end-to-end policy, memory is implicit: whatever the network keeps in its weights and in its short window of recent frames. An agent system moves memory out of the model and into the harness, where explicit rules write, update, and delete what it remembers, and decide what the model reads (Figure 5, Table 8). Coding agents already work this way: Claude Code loads CLAUDE.md files into every session and compacts the conversation into a summary when the context fills up [29], and Codex reads AGENTS.md instruction files from the project before every task [30].
+
+<Figure
+  width={870}
+  title="Memory inside the model, or in the harness."
+  caption="Left: an end-to-end policy carries state implicitly in its weights and recent frames. Right: the harness sits between the model and the robot. It writes observations, tool receipts, and every executed action into memory M, updates or deletes entries by rule, and builds the context the model reads."
+>
+  <Diagram
+    width={870}
+    height={300}
+    animate
+    label="Two panels. Implicit: the robot sends frames to a VLA, which keeps state in its weights and recent frames and sends actions back. Explicit: the robot's receipt is written into memory by a rule, a read rule builds the VLM's context from memory, and the VLM sends an action to the robot."
+    groups={[
+      { x: 10, y: 40, w: 300, h: 250, label: 'Implicit: inside the model' },
+      { x: 340, y: 40, w: 520, h: 250, label: 'Explicit: outside the model' },
+    ]}
+    nodes={[
+      { id: 'i_vla', x: 60, y: 70, w: 200, h: 60, label: 'VLA\nweights + last frames', kind: 'decoder' },
+      { id: 'i_robot', x: 60, y: 220, w: 200, h: 44, label: 'Robot', kind: 'neutral', shape: 'pill' },
+      { id: 'e_vlm', x: 585, y: 56, w: 130, h: 44, label: 'VLM', kind: 'engine' },
+      { id: 'e_mem', x: 585, y: 168, w: 130, h: 44, label: 'Memory M', kind: 'source' },
+      { x: 575, y: 228, w: 150, h: 26, label: 'update · delete', kind: 'tag', shape: 'pill', size: 13 },
+      { id: 'e_robot', x: 350, y: 168, w: 82, h: 44, label: 'Robot', kind: 'neutral', shape: 'pill' },
+    ]}
+    edges={[
+      { from: 'i_robot', to: 'i_vla', fromAt: 0.22, toAt: 0.22, label: 'frames', step: 0 },
+      { from: 'i_vla', to: 'i_robot', fromAt: 0.78, toAt: 0.78, label: 'actions', step: 1 },
+      { from: 'e_robot', to: 'e_mem', label: 'write: obs', step: 0 },
+      { from: 'e_mem', to: 'e_vlm', label: 'read: context', step: 1 },
+      { from: 'e_vlm', to: 'e_robot', fromSide: 'left', toSide: 'top', label: 'action', labelAt: 0.4, step: 2 },
+      { from: 'e_vlm', to: 'e_mem', fromSide: 'right', toSide: 'right', via: [[805, 78], [805, 190]], label: 'write: action', labelAt: 0.62, step: 2 },
+    ]}
+  />
+</Figure>
+
+<Figure
+  kind="table"
+  compact
+  title="Write, update, delete."
+  caption="The three memory operations a harness makes explicit; in an end-to-end policy the same choices are fixed by the architecture and training. Reading builds the model's context from what remains (Figure 5)."
+>
+
+| Operation | Implicit (end-to-end) | Explicit (harness) | Example |
+|---|---|---|---|
+| Write | New frames enter a fixed window; lasting change only through training | Append each observation, tool receipt, and executed action as a record | Observation, action, receipt records in RoboICL [16] |
+| Update | Hidden state overwritten every step; weights change only by retraining | Revise an entry when the world or the rules change, such as a belief, a summary, or a written rule | Editing CLAUDE.md or AGENTS.md as rules change [29, 30] |
+| Delete | Frames fall out of the window | Drop or compress by rule, keeping what matters for the task | GPT-Policy's context compiler [15]; compaction in Claude Code [29] |
+
+</Figure>
+
+## Time: Steps, Chunks, and Asynchrony
+
+Every scheme faces the same tension: waiting for the model stalls the robot, but acting without waiting follows a stale plan. Figure 6 compares five ways of handling it, and Table 9 lists them with representative work. Whether the world pauses while the model responds changes the picture: RobotWorld pauses the simulator while the model responds [20], while Embodied First Exam can also keep the world running on a wall clock [17].
+
+<Figure
+  width={1100}
+  title="Who waits for whom."
+  caption="Five schemes over the same stretch of time. Yellow: the model responding, from observation to output action; teal: the robot acting, drawn as dense ticks for fast control; shaded: the robot idle. Switch the world between paused and running to see when idle time costs."
+>
+  <TimelineCompare />
+</Figure>
+
+<Figure
+  kind="table"
+  compact
+  title="How responding and acting share time."
+  caption="End-to-end models and agent systems resolve the same tension; the last two rows are agent-side schemes."
+>
+
+| Scheme | While the model responds | Example |
+|---|---|---|
+| Stop and think | The robot waits; thinking and acting alternate | Diffusion Policy [31], ReAct [1] |
+| Smoothed chunks | Still waits, but overlapping chunk predictions are blended at the boundaries | ACT [32] |
+| Next chunk while acting | The robot keeps executing; the new chunk is spliced in when it arrives | RTC [33], SmolVLA [34] |
+| Slow brain, fast body | A slow reasoner updates a plan that a fast controller always follows | Helix [35], Hi Robot [36] |
+| Write a program, then run | The model writes code once; the code runs the fast loop | Code as Policies [21] |
+| Monitor and interrupt | Skills run in the background; events interrupt and replace them | TypeGo [37], asynchronous tool use [38] |
+
+</Figure>
+
+{/* Figure 1: "t = 0, 1, 2, …" — the time structure of the agent–environment loop.
+    - Commitment horizon: how long one decision is executed before looking again — single step → action chunk → skill (a skill is a nested inner loop inside a_t).
+    - Sync vs async: does the policy wait while a_t executes, or keep running? (async chunked inference ↔ agents monitoring background skills)
+    - Interruption & recovery: issuing a new a_t before the last one finishes.
+    - Figure idea: horizon (step / chunk / skill) × sync / async, as a 2D grid.
+      e.g. a chunked VLA = low-level action space + medium horizon; a synchronous agent = skill action space + long, variable horizon. */}
+
+## Learning: Meta-Learning, Continual Learning, and RSI
+
+Learning sits outside the loop: experience from many episodes updates the policy π and memory M, and the improved agent goes back into new episodes (Figure 7). Meta-learning, continual learning, and recursive self-improvement (RSI) are names for this one process from different communities [39]; what separates them is the question asked of it (Table 10). In-context learning changes only memory, so it belongs to the [agent's memory](#memory) rather than here.
+
+<Figure
+  width={860}
+  title="One learning process."
+  caption="Experience from many episodes updates π and M, and the better agent runs new episodes. The three questions below are three ways to check that this loop actually improves the agent."
+>
+  <Diagram
+    width={860}
+    height={260}
+    animate
+    label="A loop: experience from many episodes goes to an update of the policy and memory, which produces a better agent, which runs the next episodes. Below, three questions: does it adapt faster, does it keep old skills, does improvement compound."
+    groups={[
+      { x: 20, y: 50, w: 220, h: 90, stack: 2 },
+    ]}
+    nodes={[
+      { id: 'eps', x: 40, y: 66, w: 180, h: 58, label: 'Episodes\n(the loop in Figure 1)', kind: 'neutral' },
+      { id: 'upd', x: 340, y: 66, w: 180, h: 58, label: 'Update π and M', kind: 'mesh' },
+      { id: 'agent', x: 640, y: 66, w: 180, h: 58, label: 'Better agent', kind: 'engine' },
+      { x: 30, y: 214, w: 210, label: 'Adapts faster?', kind: 'tag', shape: 'pill' },
+      { x: 325, y: 214, w: 210, label: 'Keeps old skills?', kind: 'tag', shape: 'pill' },
+      { x: 620, y: 214, w: 210, label: 'Improvement compounds?', kind: 'tag', shape: 'pill' },
+    ]}
+    edges={[
+      { from: 'eps', to: 'upd', label: 'experience', step: 0 },
+      { from: 'upd', to: 'agent', step: 1 },
+      { from: 'agent', to: 'eps', fromSide: 'bottom', toSide: 'bottom', via: [[730, 180], [130, 180]], label: 'next episodes', step: 2 },
+    ]}
+  />
+</Figure>
+
+<Figure
+  kind="table"
+  compact
+  title="Three questions to ask of any learning claim."
+  caption="One learning process, three checks. A robot that eventually succeeds after many attempts passes none of them by itself."
+>
+
+| Question | Evidence that answers it | Usually called | Example work |
+|---|---|---|---|
+| Does it adapt faster on a new task? | Fewer trials to succeed on unseen tasks than starting fresh | Meta-learning | MAML [40], RL² [41], ORBIT [42] |
+| Does it keep old skills? | Old tasks still pass after new ones are learned | Continual learning | LIBERO [43], π*0.6 [44], Simple Recipe Works [45] |
+| Does improvement compound? | A newer update rule beats the older one from the same start, on unseen tasks | Recursive self-improvement | EmbodiRSI [46], Hyperagents [47], PhysRSI-eval [48] |
+
+</Figure>
+
+{/* Figure 1: the Learning box and the stack of N episodes — outside the runtime loop.
+    - Meta-learning, continual learning, recursive self-improvement (RSI): spell out RSI on first use.
+    - What changes: the policy π and memory M (how M is updated; sometimes long-term memory directly) — not one step of the runtime.
+    - In-context learning is NOT in this box: weights stay fixed and only the context changes (e.g. GPT-Policy [15]) — it is covered under Task (K) and Agent: Policy and Memory (M).
+    - Feedback for learning: who decides success (R, r_{t+1}) — rules, learned detectors, or a VLM. */}
+
+## VLA vs. WAM vs. LLM-Based Agent
+
+VLAs, WAMs, and LLM-based agents are not three rungs of one ladder: a VLA decides how to move, a WAM also predicts what will happen, and an LLM-based agent decides what to do next, often by calling the other two as skills [49, 50].
+
+{/* Framing: the three are not on the same layer. An LLM-based agent orchestrates (what to do, which capability to call); a VLA is an action model (how to move next); a WAM couples action with prediction (what happens if I act). Comparing "LLM-based agent vs VLA/WAM" often compares a whole orchestration system with one of its action models — so this is not a ranking. A VLA can use a VLM backbone, and an agent can call a VLA as one of its skills.
+
+    Background on the end-to-end families (inputs and outputs):
+    - VLA, π0.5 [2] / MolmoAct 2 [3]: images + instruction (+ proprioception) → fixed-rate action chunks. π0.5 predicts a subtask in language first; MolmoAct 2 reasons spatially before acting. Reasoning stays inside one forward pass.
+    - WAM, DreamZero [4] (named the family): same input → future video + the actions that produce it, from a video-diffusion backbone running closed loop. Reported to generalize to unseen environments and objects better than strong pretrained VLAs in its setting — one setting, not a general ranking.
+
+    Where an agent's advantage comes from (analysis, not a proven rule):
+    1. Transferable knowledge — web-scale vision-language data vs scarce, embodiment-bound robot data. But VLAs also try to inherit VLM knowledge (e.g. RT-2); what matters is whether it survives training.
+    2. Composing existing skills — a new task becomes a new combination of reliable skills. Bounded by the skill library: a correct plan cannot open a bottle without a bottle-opening skill.
+    3. Runtime mechanisms, not the model — keeping history, checking real outcomes, replanning. These can be added around a VLA too. Explaining a failure is not the same as detecting one; checks must rest on environment feedback.
+    4. Versus WAM — task-level reasoning may be enough when the question is ordering ("clear the cups or wipe the table first?"); predicting future states helps more with contact, sliding, and novel motions, at extra compute and compounding prediction error.
+
+    What a fair comparison must control: keep the same executor and add VLM planning, memory, and outcome checks one at a time; test new instruction combinations, new objects, new physical motions, and interruptions; do not compare success rates across different real-robot setups.
+
+    Cited: Towards Embodied Agentic AI [49]; Large VLM-based VLA Models for Robotic Manipulation: A Survey [50].
+    Other surveys from the research notes (not verified, not cited): Agentic LLM-based robotic systems … agenticness and ethics (Frontiers in Robotics and AI, 2025); World Action Models: The Next Frontier in Embodied AI (May 2026); World-Action Models for Robot Learning and Control: A Survey (Sep 2026). */}
+
+<Figure
+  kind="table"
+  compact
+  title="VLA, WAM, and LLM-based agents."
+  caption="Typical roles, not a ranking: the three sit at different layers, and an agent can call a VLA as one of its skills."
+>
+
+|  | VLA | WAM | LLM-based agent |
+|---|---|---|---|
+| Role | How to move next | What happens if I act | What to do next |
+| Input | Images, instruction, robot state | Images, instruction | Images, instruction, memory, tool results |
+| Output | Action chunks | Future frames + actions | Tool calls, programs |
+| Knowledge | VLM backbone + robot data | Video + action data | Agentic + coding post-training |
+| Memory / feedback | Short window, no check | Predicts, no check | History, checks, replans |
+| Strength | Dexterous, low latency | Dynamics, new scenes | Long tasks, composing skills |
+| Limit | Scarce robot data | Compute, prediction error | Skill library, latency |
+
+</Figure>
+
+## Open Questions
+
+1. **How do we reduce the latency of agent systems?** Each reasoning step is far slower than a control loop, so the agent has to decide [how long to commit and whether to keep thinking while it acts](#time-steps-chunks-and-asynchrony).
+2. **How do agent systems handle fine-grained manipulation?** An agent is only as dexterous as the skills it can call; contact-rich tasks may need [VLA or WAM policies as skills](#vla-vs-wam-vs-llm-based-agent).
+3. **What is the right harness interface for LLM-based agents?** What the agent observes, how skills are described, and what each call returns together define [the interface](#interface-observation-and-action-spaces) it reasons over.
+4. **Could we build MCP servers for robotics?** The [Model Context Protocol](https://modelcontextprotocol.io) standardizes how LLM-based agents connect to tools and data; robot skills and sensors could be exposed the same way.
+5. **How do we define physical intelligence?** The term is used everywhere but rarely pinned down: is it dexterity, an understanding of physics, or [the whole loop](#the-agentenvironment-loop) working well under real-world uncertainty?
+
+## References
+
+1. S. Yao et al. [ReAct: Synergizing Reasoning and Acting in Language Models](https://arxiv.org/abs/2210.03629). International Conference on Learning Representations (ICLR), 2023.
+2. Physical Intelligence. [π0.5: a Vision-Language-Action Model with Open-World Generalization](https://proceedings.mlr.press/v305/black25a.html). Proceedings of the Conference on Robot Learning (CoRL), PMLR 305, 2025.
+3. Ai2. [MolmoAct2: Action Reasoning Models for Real-world Deployment](https://allenai.org/papers/molmoact2). 2026.
+4. S. Ye et al. [World Action Models are Zero-shot Policies](https://arxiv.org/abs/2602.15922). arXiv:2602.15922, 2026.
+5. A. Brohan et al. [RT-2: Vision-Language-Action Models Transfer Web Knowledge to Robotic Control](https://arxiv.org/abs/2307.15818). Conference on Robot Learning (CoRL), 2023.
+6. C. Lynch et al. [Learning Latent Plans from Play](https://arxiv.org/abs/1903.01973). Conference on Robot Learning (CoRL), 2019.
+7. J. Gu et al. [RT-Trajectory: Robotic Task Generalization via Hindsight Trajectory Sketches](https://arxiv.org/abs/2311.01977). International Conference on Learning Representations (ICLR), 2024.
+8. V. Jain et al. [Vid2Robot: End-to-end Video-conditioned Policy Learning with Cross-Attention Transformers](https://arxiv.org/abs/2403.12943). Robotics: Science and Systems (RSS), 2024.
+9. Y. Jiang et al. [VIMA: General Robot Manipulation with Multimodal Prompts](https://arxiv.org/abs/2210.03094). International Conference on Machine Learning (ICML), 2023.
+10. S. Nasiriany et al. [PIVOT: Iterative Visual Prompting Elicits Actionable Knowledge for VLMs](https://arxiv.org/abs/2402.07872). International Conference on Machine Learning (ICML), 2024.
+11. B. Liu et al. [LLM+P: Empowering Large Language Models with Optimal Planning Proficiency](https://arxiv.org/abs/2304.11477). arXiv:2304.11477, 2023.
+12. H. Huang et al. [In-Context Learning for Robots: Methods and Applications](https://arxiv.org/abs/2609.36012). arXiv:2609.36012, 2026.
+13. A. Simeonov et al. [Neural Descriptor Fields: SE(3)-Equivariant Object Representations for Manipulation](https://arxiv.org/abs/2112.05124). IEEE International Conference on Robotics and Automation (ICRA), 2022.
+14. J. Zhou et al. [Zero-WAM: In-Context World-Action Modeling from Human Videos for Open-Ended Task Generalization](https://arxiv.org/abs/2608.26103). arXiv:2608.26103, 2026.
+15. D. Cheng et al. [In-Context Robot Learning with VLM Agents](https://arxiv.org/abs/2609.19138). arXiv:2609.19138, 2026.
+16. F. Liu et al. [RoboICL: Embodied In-Context Learning with GPT-6 Astra](https://arxiv.org/abs/2609.34261). arXiv:2609.34261, 2026.
+17. K. Wang et al. [Embodied First Exam](https://www.embodied-first-exam.ai). Benchmark website and code, 2026.
+18. H. Liu et al. [Guava: Distilling Frontier VLMs into a Compact Agent through a Robotic Manipulation Harness](https://arxiv.org/abs/2606.18363). arXiv:2606.18363, 2026.
+19. J. X. Yang et al. [Astranomy: An Empirical Study of GPT-6 Astra as a Native Robot Policy](https://research.nvidia.com/labs/srl/projects/astranomy/). NVIDIA technical report, 2026.
+20. Z. Yang et al. [RobotWorld: Benchmarking Multimodal Agents for Robot Use Across Diverse Tasks and Embodiments](https://arxiv.org/abs/2610.10409). arXiv:2610.10409, 2026.
+21. J. Liang et al. [Code as Policies: Language Model Programs for Embodied Control](https://arxiv.org/abs/2209.07753). IEEE International Conference on Robotics and Automation (ICRA), 2023.
+22. L. Fu et al. [CaP-X: A Framework for Benchmarking and Improving Coding Agents for Robot Manipulation](https://arxiv.org/abs/2603.22435). International Conference on Machine Learning (ICML), 2026.
+23. Y. Chen et al. [Show-Harness: Just a VLM Agent Can Play Robots](https://arxiv.org/abs/2609.10522). arXiv:2609.10522, 2026.
+24. K. Fang et al. [MOKA: Open-World Robotic Manipulation through Mark-Based Visual Prompting](https://arxiv.org/abs/2403.03174). Robotics: Science and Systems (RSS), 2024.
+25. Y. Li et al. [HAMSTER: Hierarchical Action Models for Open-World Robot Manipulation](https://arxiv.org/abs/2502.05485). International Conference on Learning Representations (ICLR), 2025.
+26. W. Huang et al. [ReKep: Spatio-Temporal Reasoning of Relational Keypoint Constraints for Robotic Manipulation](https://arxiv.org/abs/2409.01652). Conference on Robot Learning (CoRL), 2024.
+27. W. Huang et al. [VoxPoser: Composable 3D Value Maps for Robotic Manipulation with Language Models](https://arxiv.org/abs/2307.05973). Conference on Robot Learning (CoRL), 2023.
+28. Y. Zhang et al. [Harness VLA: Steering Frozen VLAs into Reliable Manipulation Primitives via Memory-Guided Agents](https://arxiv.org/abs/2607.08448). arXiv:2607.08448, 2026.
+29. Anthropic. [How Claude remembers your project](https://code.claude.com/docs/en/memory). Claude Code documentation, 2026.
+30. OpenAI. [Custom instructions with AGENTS.md](https://learn.chatgpt.com/docs/agent-configuration/agents-md). Codex documentation, 2026.
+31. C. Chi et al. [Diffusion Policy: Visuomotor Policy Learning via Action Diffusion](https://arxiv.org/abs/2303.04137). Robotics: Science and Systems (RSS), 2023.
+32. T. Z. Zhao et al. [Learning Fine-Grained Bimanual Manipulation with Low-Cost Hardware](https://arxiv.org/abs/2304.13705). Robotics: Science and Systems (RSS), 2023.
+33. K. Black et al. [Real-Time Execution of Action Chunking Flow Policies](https://arxiv.org/abs/2506.07339). Neural Information Processing Systems (NeurIPS), 2025.
+34. M. Shukor et al. [SmolVLA: A Vision-Language-Action Model for Affordable and Efficient Robotics](https://arxiv.org/abs/2506.01844). arXiv:2506.01844, 2025.
+35. Figure AI. [Helix: A Vision-Language-Action Model for Generalist Humanoid Control](https://www.figure.ai/news/helix). Blog post, 2025.
+36. L. X. Shi et al. [Hi Robot: Open-Ended Instruction Following with Hierarchical Vision-Language-Action Models](https://arxiv.org/abs/2502.19417). International Conference on Machine Learning (ICML), 2025.
+37. Y. Chen et al. [TypeGo: An OS Runtime for Embodied Agents](https://arxiv.org/abs/2607.05482). arXiv:2607.05482, 2026.
+38. A. Ginart et al. [Asynchronous Tool Usage for Real-Time Agents](https://arxiv.org/abs/2410.21620). arXiv:2410.21620, 2024.
+39. H. Zhou et al. [Who Improves the Robot? Toward Physical Recursive Self-Improvement](https://arxiv.org/abs/2610.18842). arXiv:2610.18842, 2026.
+40. C. Finn et al. [Model-Agnostic Meta-Learning for Fast Adaptation of Deep Networks](https://proceedings.mlr.press/v70/finn17a.html). International Conference on Machine Learning (ICML), 2017.
+41. Y. Duan et al. [RL²: Fast Reinforcement Learning via Slow Reinforcement Learning](https://arxiv.org/abs/1611.02779). arXiv:1611.02779, 2016.
+42. X. Lin et al. [Scaling In-Context Online Learning Capability of LLMs via Cross-Episode Meta-RL](https://arxiv.org/abs/2602.04089). arXiv:2602.04089, 2026.
+43. B. Liu et al. [LIBERO: Benchmarking Knowledge Transfer for Lifelong Robot Learning](https://arxiv.org/abs/2306.03310). Neural Information Processing Systems (NeurIPS), Datasets and Benchmarks Track, 2023.
+44. Physical Intelligence. [π*0.6: a VLA That Learns From Experience](https://arxiv.org/abs/2511.14759). arXiv:2511.14759, 2025.
+45. J. Hu et al. [Simple Recipe Works: Vision-Language-Action Models are Natural Continual Learners with Reinforcement Learning](https://arxiv.org/abs/2603.11653). Reinforcement Learning Conference (RLC), 2026.
+46. H. Lang et al. [EmbodiRSI: Recursive Self-Improvement for Data-Efficient Robot Adaptation](https://arxiv.org/abs/2609.38905). arXiv:2609.38905, 2026.
+47. J. Zhang et al. [Hyperagents](https://arxiv.org/abs/2603.19461). arXiv:2603.19461, 2026.
+48. Z. Li et al. [Where is Physical RSI capability from? An Observational Scaling Law of LLM-as-policy](https://arxiv.org/abs/2610.26848). arXiv:2610.26848, 2026.
+49. S. Salimpour et al. [Towards Embodied Agentic AI: Review and Classification of LLM- and VLM-Driven Robot Autonomy and Interaction](https://arxiv.org/abs/2508.05294). arXiv:2508.05294, 2025.
+50. R. Shao et al. [Large VLM-based Vision-Language-Action Models for Robotic Manipulation: A Survey](https://arxiv.org/abs/2508.13073). arXiv:2508.13073, 2025.

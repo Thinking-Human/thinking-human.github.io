@@ -1,0 +1,74 @@
+---
+import '@fontsource-variable/inter';
+import '@fontsource/libre-baskerville/400.css';
+import '@fontsource/libre-baskerville/400-italic.css';
+import '../styles/global.css';
+import { withBase } from '../lib/posts';
+import { SITE } from '../site.config';
+import SideScene from '../components/SideScene.astro';
+
+interface Props {
+  title: string;
+  description?: string;
+  ogType?: 'website' | 'article';
+  /** Split layout: fixed 3D scene in the left third, reading column in the right two thirds. */
+  split?: boolean;
+  /** 3D model for the side panel (split layout only). */
+  scene?: string;
+  /** Landing page: no header wordmark (the page's own hero is the wordmark). */
+  bare?: boolean;
+}
+
+const { title, description = SITE.description, ogType = 'website', split = false, scene, bare = false } = Astro.props;
+const siteName = SITE.name;
+const fullTitle = title === siteName ? title : `${title} · ${siteName}`;
+const canonical = new URL(Astro.url.pathname, Astro.site);
+const inBlog = Astro.url.pathname.startsWith(withBase('blog')) || Astro.url.pathname.startsWith(withBase('posts'));
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="only light" />
+    <title>{fullTitle}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    <link rel="icon" type="image/svg+xml" href={withBase('favicon.svg')} />
+    <link rel="alternate" type="application/rss+xml" title={siteName} href={withBase('rss.xml')} />
+    <meta property="og:type" content={ogType} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:site_name" content={siteName} />
+    <meta name="twitter:card" content="summary" />
+  </head>
+  <body class:list={{ 'is-split': split, 'is-bare': bare }}>
+    <header class="site-header">
+      <div class="nav-wrap">
+        {bare ? <span /> : <a class="wordmark" href={withBase('/')}>{siteName}</a>}
+        <nav class="nav-links" aria-label="Site">
+          <a href={withBase('blog/')} aria-current={inBlog ? 'page' : undefined}>Blog</a>
+          {SITE.homepage && <a class="nav-button" href={SITE.homepage}>Homepage</a>}
+        </nav>
+      </div>
+    </header>
+    {
+      split && (
+        <aside class="side-panel" aria-hidden="true">
+          <SideScene seed={Astro.url.pathname} model={scene} />
+        </aside>
+      )
+    }
+    <div class="reading">
+      <main>
+        <slot />
+      </main>
+      <footer class="site-footer">
+        <span>© {new Date().getFullYear()} {SITE.author}</span>
+        <a href={SITE.sourceUrl}>Source</a>
+      </footer>
+    </div>
+  </body>
+</html>
