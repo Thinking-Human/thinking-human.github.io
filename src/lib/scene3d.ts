@@ -333,9 +333,65 @@ const MODELS: Record<string, Builder> = {
     t.cyl(0.18, 0.28, 0.35, 0, y, 0, 24);
     t.sphere(0.24, 0, y + 0.55);
   },
+
+  probability_flow(g, t) {
+    // Particles carried by an ODE from a 2D Gaussian (bottom) to a ring
+    // (top); height is time, so the cloud at each height is p_t. Each path
+    // is the radial monotone (optimal transport) interpolation plus a rigid
+    // rotation: p_t is radially symmetric, so the rotation w satisfies
+    // div(p_t w) = 0 and swirls the particles without changing any p_t.
+    const N = 90;
+    const SIGMA = 0.55; // source Gaussian std
+    const R = 2.3; // target ring radius
+    const W = 0.25; // target ring half-width
+    const Y0 = 0.62;
+    const H = 5.4; // height of t = 1 above t = 0
+    const SWIRL = Math.PI * 0.6; // total rotation from t = 0 to t = 1
+    const LOOP = 10;
+
+    // Deterministic samples, so the model looks the same on every visit.
+    let seed = 7;
+    const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    const paths = Array.from({ length: N }, () => {
+      const u = 0.005 + 0.995 * rand();
+      const r0 = SIGMA * Math.sqrt(-2 * Math.log(u)); // radius of a 2D Gaussian sample
+      const r1 = R + W * (1 - 2 * u); // same quantile of the ring's radius
+      return { r0, r1, a: rand() * Math.PI * 2 };
+    });
+    const at = ({ r0, r1, a }: (typeof paths)[number], s: number) => {
+      const r = r0 + (r1 - r0) * s;
+      const th = a + SWIRL * s;
+      return new THREE.Vector3(Math.cos(th) * r, Y0 + H * s, Math.sin(th) * r);
+    };
+
+    // Samples from p_0 marked on the plinth, and the trajectories as thin lines.
+    for (const p of paths) t.alt.cyl(0.06, 0.06, 0.02, Math.cos(p.a) * p.r0, 0.5, Math.sin(p.a) * p.r0, 12);
+    const lineMat = new THREE.LineBasicMaterial({ color: 0x8f908c, transparent: true, opacity: 0.35 });
+    paths.forEach((p, i) => {
+      if (i % 2) return;
+      const pts = Array.from({ length: 41 }, (_, k) => at(p, k / 40));
+      g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), lineMat));
+    });
+
+    // The particles: up the flow (sampling), pause, then back down (the ODE is invertible).
+    const dots = paths.map(() => t.sphere(0.09));
+    const pose = (time: number) => {
+      const p = time % LOOP;
+      const s = smooth(1, 5, p) - smooth(6, 10, p);
+      paths.forEach((path, i) => dots[i].position.copy(at(path, s)));
+    };
+
+    let time = 0;
+    pose(time);
+    g.userData.update = (dt: number) => pose((time += dt));
+  },
 };
 
 export const MODEL_NAMES = Object.keys(MODELS);
+// Topic-specific models appear only where a post pins them with `scene:` (or
+// ?scene=), never in the per-section cycle of other posts.
+const PINNED_ONLY = new Set(['probability_flow']);
+const CYCLE = MODEL_NAMES.filter((n) => !PINNED_ONLY.has(n));
 
 export function mount(host: HTMLElement, opts: { seed: string; model?: string; sections?: HTMLElement[] }) {
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -389,16 +445,17 @@ export function mount(host: HTMLElement, opts: { seed: string; model?: string; s
   // from a deterministic model per page and change it per section.
   // ?scene=<name> sets the first model (handy when tweaking models).
   const hash = [...opts.seed].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
-  const fixed = MODEL_NAMES.indexOf(opts.model ?? '');
-  const pinned = MODEL_NAMES.indexOf(new URLSearchParams(location.search).get('scene') ?? '');
-  const base = pinned >= 0 ? pinned : fixed >= 0 ? fixed : hash % MODEL_NAMES.length;
-  const nameFor = (section: number) => MODEL_NAMES[(base + section) % MODEL_NAMES.length];
+  const known = (name?: string | null) => (name && MODEL_NAMES.includes(name) ? name : undefined);
+  const fixed = known(opts.model);
+  const first = known(new URLSearchParams(location.search).get('scene')) ?? fixed ?? CYCLE[hash % CYCLE.length];
+  const base = Math.max(0, CYCLE.indexOf(first));
+  const nameFor = (section: number) => (section === 0 ? first : CYCLE[(base + section) % CYCLE.length]);
 
   let section = 0;
   let model = build(nameFor(0));
   scene.add(model);
 
-  const sections = fixed >= 0 ? [] : (opts.sections ?? []);
+  const sections = fixed ? [] : (opts.sections ?? []);
   const currentSection = () => {
     let i = 0;
     sections.forEach((s, k) => {
