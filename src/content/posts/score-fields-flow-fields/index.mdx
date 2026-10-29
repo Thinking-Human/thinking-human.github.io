@@ -1,0 +1,201 @@
+---
+title: 'Score Fields, Flow Fields, and the Geometry of Probability Transport'
+description: 'Must the vector fields behind diffusion and flow matching be gradients? Why estimating a distribution differs from transporting it.'
+date: 2026-10-28
+authors: []
+tags: ['generative models', 'math']
+scene: probability_flow
+draft: false
+---
+
+Diffusion models [1, 2] and flow matching models [3, 4] both generate samples by transforming a simple distribution into a data distribution. Although their training objectives look different, both can be understood through time-dependent vector fields.
+
+An interesting mathematical question is: **Must these vector fields be gradients of scalar potentials?**
+
+The answer reveals an important distinction between estimating a probability distribution and transporting it.
+
+## Diffusion Scores are Gradient Fields
+
+In score-based diffusion models, the central quantity is the score of a time-dependent probability density $p_t(x)$:
+
+$$
+s_t(x)=\nabla_x\log p_t(x).
+$$
+
+Throughout, $\nabla$ and $\nabla\cdot$ act on $x$, so the subscript is dropped from here on. Defining the potential
+
+$$
+U_t(x)=-\log p_t(x),
+$$
+
+we immediately obtain
+
+$$
+s_t(x)=-\nabla U_t(x).
+$$
+
+Thus, the ideal score is a **conservative (curl-free) vector field**. Equivalently, its Jacobian is symmetric:
+
+$$
+\frac{\partial (s_t)_i}{\partial x_j}
+=
+\frac{\partial (s_t)_j}{\partial x_i}
+\quad\text{for all } i,j.
+$$
+
+This property comes from the mathematical definition of the score, rather than the neural network architecture. A learned score network does not necessarily satisfy it exactly.
+
+Importantly, the score should not be confused with the velocity of the diffusion probability-flow ODE [2]. The latter also includes the drift of the forward diffusion process and is not necessarily conservative.
+
+## Flow Matching Learns Probability Transport
+
+Flow matching instead learns a velocity field $v_t(x)$ defining an ODE:
+
+$$
+\frac{dx_t}{dt}=v_t(x_t).
+$$
+
+The evolving probability density must satisfy the **continuity equation**:
+
+$$
+\boxed{
+\partial_t p_t+
+\nabla\cdot(p_t v_t)=0
+}
+$$
+
+This equation expresses conservation of probability mass. Unlike the definition of a score, it does not require $v_t$ to be the gradient of a scalar potential.
+
+To see why, suppose $v_t$ satisfies the continuity equation. Consider another velocity field
+
+$$
+\tilde v_t=v_t+w_t,
+$$
+
+where
+
+$$
+\boxed{
+\nabla\cdot(p_t w_t)=0
+}
+$$
+
+Then
+
+$$
+\nabla\cdot(p_t\tilde v_t)
+=
+\nabla\cdot(p_t v_t).
+$$
+
+Consequently, both velocity fields generate the same density evolution, assuming the same initial density and suitable regularity conditions.
+
+The additional field $w_t$ changes individual particle trajectories without changing the marginal probability distribution at any time.
+
+This is a form of **gauge freedom in probability transport**.
+
+## Decomposing a Probability Flow
+
+The non-uniqueness suggests decomposing a velocity field into two components:
+
+$$
+\boxed{
+v_t=\nabla\phi_t+w_t,
+\qquad
+\nabla\cdot(p_t w_t)=0
+}
+$$
+
+This is a weighted Helmholtz decomposition, under appropriate regularity and boundary conditions. Horvat and Pfister [5] use the same kind of decomposition for diffusion models and show that a learned vector field need not be conservative: exact sampling and density estimation only require its conservative component to equal the true score.
+
+The first component is a potential flow, while the second is weighted-divergence-free: it does not contribute to the instantaneous evolution of the probability density.
+
+Using the weighted inner product
+
+$$
+\langle a,b\rangle_{p_t}
+=
+\int p_t(x)a(x)^\top b(x)\,dx,
+\qquad
+\|a\|_{p_t}^2=\langle a,a\rangle_{p_t},
+$$
+
+the two components are orthogonal:
+
+$$
+\langle\nabla\phi_t,w_t\rangle_{p_t}=0.
+$$
+
+Therefore,
+
+$$
+\boxed{
+\|v_t\|_{p_t}^2
+=
+\|\nabla\phi_t\|_{p_t}^2
++
+\|w_t\|_{p_t}^2
+}
+$$
+
+This decomposition has a useful geometric interpretation: among velocity fields inducing the same instantaneous density change, the potential component is the minimum-norm representative.
+
+It is important that the condition is **weighted divergence-free**, not simply $\nabla\cdot w_t=0$. Moreover, the decomposition is not equivalent to separating a field into its curl-free and rotational components in the ordinary unweighted sense.
+
+## Connection to Optimal Transport
+
+This structure is closely related to the dynamic formulation of Wasserstein-2 optimal transport [6]:
+
+$$
+W_2^2(p_0,p_1)
+=
+\inf_{p_t,v_t}
+\int_0^1
+\int p_t(x)\|v_t(x)\|^2\,dx\,dt,
+$$
+
+subject to the continuity equation and fixed endpoint distributions.
+
+The objective minimizes the total kinetic action of probability transport. Under standard assumptions, an optimal velocity field can be represented as
+
+$$
+v_t=\nabla\phi_t.
+$$
+
+Thus, optimal transport selects a potential flow through a minimum-action principle.
+
+**Important Note:** flow matching does not inherently produce non-conservative fields. For example, the common Gaussian path $x_t=\alpha_t x_1+\sigma_t\varepsilon$, with data $x_1$ and noise $\varepsilon\sim\mathcal N(0,I)$ drawn independently, yields a marginal velocity of the form
+
+$$
+v_t(x)=a_t x+b_t\nabla\log p_t(x),
+\qquad
+a_t=\frac{\dot\alpha_t}{\alpha_t},
+\quad
+b_t=\sigma_t\Big(\frac{\dot\alpha_t\sigma_t}{\alpha_t}-\dot\sigma_t\Big),
+$$
+
+where $a_t,b_t$ depend only on time. This velocity is itself a gradient field, of $\tfrac{a_t}{2}\|x\|^2+b_t\log p_t(x)$.
+
+More general conditional paths and couplings, however, need not share this property.
+
+## Takeaway
+
+The distinction is not that diffusion always produces gradient flows while flow matching produces rotational flows.
+
+Rather:
+
+- **Score matching** estimates a vector field that is a gradient by definition.
+- **Flow matching** estimates a velocity field satisfying probability conservation, which does not generally require a potential representation.
+- **Weighted Helmholtz decomposition** separates density-changing transport from components that preserve the instantaneous density.
+- **Optimal transport** provides a geometric principle for selecting a minimum-action representative.
+
+In summary, the broader insight is that **the evolution of a probability distribution does not uniquely determine how individual particles move through space**.
+
+## References
+
+1. J. Ho, A. Jain, and P. Abbeel. [Denoising Diffusion Probabilistic Models](https://arxiv.org/abs/2006.11239). Advances in Neural Information Processing Systems (NeurIPS), 2020.
+2. Y. Song et al. [Score-Based Generative Modeling through Stochastic Differential Equations](https://arxiv.org/abs/2011.13456). International Conference on Learning Representations (ICLR), 2021.
+3. Y. Lipman et al. [Flow Matching for Generative Modeling](https://arxiv.org/abs/2210.02747). International Conference on Learning Representations (ICLR), 2023.
+4. X. Liu, C. Gong, and Q. Liu. [Flow Straight and Fast: Learning to Generate and Transfer Data with Rectified Flow](https://arxiv.org/abs/2209.03003). International Conference on Learning Representations (ICLR), 2023.
+5. C. Horvat and J.-P. Pfister. [On Gauge Freedom, Conservativity and Intrinsic Dimensionality Estimation in Diffusion Models](https://arxiv.org/abs/2402.03845). arXiv:2402.03845, 2024.
+6. J.-D. Benamou and Y. Brenier. [A Computational Fluid Mechanics Solution to the Monge–Kantorovich Mass Transfer Problem](https://doi.org/10.1007/s002110050002). Numerische Mathematik, 84(3):375–393, 2000.
