@@ -110,7 +110,7 @@ See the Diagrams section of `components-demo` for a full recreation of a paper f
 
 On screens wider than 900px, post pages split like lego-anything.com (the home page stays a single centered column): a fixed left third (`.side-panel` in `Base.astro`) and the reading column in the right two thirds. The side panel holds only the 3D scene.
 
-The scene (`src/lib/scene3d.ts`) renders white, procedurally built buildings — `pagoda`, `lighthouse`, `temple`, `observatory`, `windmill`, `temple_of_heaven`, plus an animated pick-and-place `robot_arm` — that rotate as you scroll. Each `##` section of a post crossfades to the next model, unless the post sets `scene: <name>` in its frontmatter to keep one model throughout. three.js is loaded only on wide screens. Add `?scene=<name>` to any URL to preview a specific model; add a new model by adding a builder to `MODELS`.
+The scene (`src/lib/scene3d.ts`) renders white, procedurally built buildings — `pagoda`, `lighthouse`, `temple`, `observatory`, `windmill`, `temple_of_heaven`, plus an animated pick-and-place `robot_arm` — that rotate as you scroll. Topic-specific models (`probability_flow`: particles transported from a Gaussian to a ring) are listed in `PINNED_ONLY` and appear only when a post pins them with `scene:`. Each `##` section of a post crossfades to the next model, unless the post sets `scene: <name>` in its frontmatter to keep one model throughout. three.js is loaded only on wide screens. Add `?scene=<name>` to any URL to preview a specific model; add a new model by adding a builder to `MODELS`.
 
 ### Reviewing a draft
 

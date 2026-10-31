@@ -1,6 +1,8 @@
 ---
 import type { CollectionEntry } from 'astro:content';
 import type { MarkdownHeading } from 'astro';
+// Must come from the same KaTeX version rehype-katex renders with (class names change between minors).
+import 'katex/dist/katex.min.css';
 import Base from './Base.astro';
 import { formatDate } from '../lib/posts';
 
